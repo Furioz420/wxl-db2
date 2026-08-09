@@ -22,7 +22,7 @@
     "title": "DB2 Tables",
     "tagline": "Reads modern client database tables, resolves assets by FileDataID, and publishes the game's retail lighting tables.",
     "description": "store/description.md",
-    "cover": "",
+    "cover": "store/cover.jpg",
     "gallery": [],
     "categories": ["assets", "data"],
     "accent": "#4f7ea8"
