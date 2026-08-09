@@ -1,0 +1,33 @@
+{
+  "manifest": 1,
+
+  "extension": {
+    "id": "wxl-db2",
+    "version": "1.0.0",
+    "abi": "1.1",
+    "entry": "wxl-db2.dll",
+    "assets": [],
+    "requires": {},
+    "conflicts": [],
+
+    "hooks": []
+  },
+
+  "deploy": {
+    "mode": "release",
+    "match": "*.dll"
+  },
+
+  "listing": {
+    "title": "DB2 Tables",
+    "tagline": "Reads modern client database tables, resolves assets by FileDataID, and publishes the game's retail lighting tables.",
+    "description": "store/description.md",
+    "cover": "",
+    "gallery": [],
+    "categories": ["assets", "data"],
+    "accent": "#4f7ea8"
+  },
+
+  "license": "GPL-3.0-or-later",
+  "signature": null
+}
