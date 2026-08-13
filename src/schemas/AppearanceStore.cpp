@@ -623,3 +623,5 @@ namespace wxl::runtime::db2::appearance
         for (const auto& entry : kTables)
             if (entry.name == table) return entry.table;
         return nullptr;
+    }
+}
