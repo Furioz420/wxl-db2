@@ -21,11 +21,15 @@
 #include "ExtensionApi.hpp"
 #include "api/FdidResolver.hpp"
 #include "decode/Wdc5.hpp"
+#include "schemas/AppearanceStore.hpp"
 #include "schemas/LightStore.hpp"
+#include "schemas/ModelStore.hpp"
 
+#include "wxl/AppearanceApi.h"
 #include "wxl/Db2Api.h"
 #include "wxl/FdidApi.h"
 #include "wxl/LightApi.h"
+#include "wxl/ModelDataApi.h"
 #include "wxl/PluginApi.h"
 
 #include <cstring>
