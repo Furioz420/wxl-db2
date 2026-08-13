@@ -21,8 +21,10 @@ namespace wxl::db2::fdid
     const char* ResolveTexture(uint32_t fileDataId);
     const char* ResolveModel(uint32_t fileDataId);
 
-    // MaterialResourcesID (+ texture-type hint) -> .blp path, via TextureFileData. Not part of the
-    // published ABI surface today (nothing outside wxl-db2 needs it yet); kept for parity with the
-    // host resolver it replaces.
+    uint32_t ResolveModelId(const char* modelPath);
+
+    // MaterialResourcesID (+ texture-type hint) -> .blp path, via TextureFileData.
     bool ResolveMaterial(uint32_t mrid, uint32_t typeHint, std::string& outPath);
+
+    const char* ResolveMaterialTexture(uint32_t mrid, uint32_t typeHint);
 }
