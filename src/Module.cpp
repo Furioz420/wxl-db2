@@ -177,6 +177,149 @@ namespace
         WXL_FDID_API_VERSION,
         &wxl::db2::fdid::ResolveTexture,
         &wxl::db2::fdid::ResolveModel,
+        &wxl::db2::fdid::ResolveMaterialTexture,
+    };
+
+    namespace modeldata = wxl::runtime::db2::model;
+
+    int __cdecl ModelDataLoaded() { return modeldata::Status().loaded ? 1 : 0; }
+    const char* __cdecl ModelDataError() { return modeldata::Status().error.c_str(); }
+    uint32_t __cdecl ModelDataRowCount() { return modeldata::Status().rows; }
+
+    uint32_t __cdecl ModelDataFileDataIdForPath(const char* modelPath)
+    {
+        return wxl::db2::fdid::ResolveModelId(modelPath);
+    }
+
+    int __cdecl ModelDataLookup(uint32_t fileDataId, WXL_ModelFileData* out)
+    {
+        if (!out) return 0;
+        modeldata::ModelFileData row;
+        if (!modeldata::Lookup(fileDataId, row)) return 0;
+
+        out->fileDataId       = row.fileDataId;
+        out->flags            = row.flags;
+        out->lodCount         = row.lodCount;
+        out->modelResourcesId = row.modelResourcesId;
+        for (int i = 0; i < 6; ++i) out->geoBox[i] = row.geoBox[i];
+        return 1;
+    }
+
+    int __cdecl ModelDataLookupByPath(const char* modelPath, WXL_ModelFileData* out)
+    {
+        const uint32_t fdid = wxl::db2::fdid::ResolveModelId(modelPath);
+        return fdid ? ModelDataLookup(fdid, out) : 0;
+    }
+
+    const WXL_ModelDataApi g_modelDataApi = {
+        sizeof(WXL_ModelDataApi),
+        WXL_MODEL_DATA_API_VERSION,
+        &ModelDataLoaded,
+        &ModelDataError,
+        &ModelDataRowCount,
+        &ModelDataFileDataIdForPath,
+        &ModelDataLookup,
+        &ModelDataLookupByPath,
+    };
+
+    namespace appearance = wxl::runtime::db2::appearance;
+
+    thread_local appearance::Recipe t_recipe;
+
+    void PublishRecipe(const appearance::Recipe& recipe, WXL_Recipe* out)
+    {
+        out->modelFileDataId    = recipe.modelFileDataId;
+        out->skeletonFileDataId = recipe.skeletonFileDataId;
+        out->textureLayoutId    = recipe.textureLayoutId;
+        out->geosets            = recipe.geosets.data();
+        out->geosetCount        = static_cast<uint32_t>(recipe.geosets.size());
+        out->layers             = recipe.layers.data();
+        out->layerCount         = static_cast<uint32_t>(recipe.layers.size());
+        out->attached           = recipe.attached.data();
+        out->attachedCount      = static_cast<uint32_t>(recipe.attached.size());
+    }
+
+    int __cdecl AppearanceForCharacter(uint32_t chrRaceId, uint32_t sex, const uint32_t* choiceIds,
+                                       uint32_t choiceCount, WXL_Recipe* out)
+    {
+        if (!out) return 0;
+        if (!appearance::BuildForCharacter(chrRaceId, sex, choiceIds, choiceCount, t_recipe))
+            return 0;
+        PublishRecipe(t_recipe, out);
+        return 1;
+    }
+
+    int __cdecl AppearanceForCreature(uint32_t creatureDisplayInfoId, WXL_Recipe* out)
+    {
+        if (!out) return 0;
+        if (!appearance::BuildForCreature(creatureDisplayInfoId, t_recipe)) return 0;
+        PublishRecipe(t_recipe, out);
+        return 1;
+    }
+
+    uint32_t __cdecl AppearanceChrModelForRace(uint32_t chrRaceId, uint32_t sex)
+    {
+        return appearance::ChrModelForRace(chrRaceId, sex);
+    }
+
+    uint32_t __cdecl AppearanceOptionCount(uint32_t chrModelId)
+    {
+        return appearance::OptionCount(chrModelId);
+    }
+
+    int __cdecl AppearanceOptionAt(uint32_t chrModelId, uint32_t index, WXL_ChrOption* out)
+    {
+        return out && appearance::OptionAt(chrModelId, index, *out) ? 1 : 0;
+    }
+
+    uint32_t __cdecl AppearanceChoiceCount(uint32_t optionId)
+    {
+        return appearance::ChoiceCount(optionId);
+    }
+
+    int __cdecl AppearanceChoiceAt(uint32_t optionId, uint32_t index, WXL_ChrChoice* out)
+    {
+        return out && appearance::ChoiceAt(optionId, index, *out) ? 1 : 0;
+    }
+
+    uint32_t __cdecl AppearanceLayoutForModel(uint32_t chrModelId)
+    {
+        return appearance::LayoutForModel(chrModelId);
+    }
+
+    int __cdecl AppearanceLayoutSize(uint32_t layoutId, uint32_t* outWidth, uint32_t* outHeight)
+    {
+        uint32_t width = 0, height = 0;
+        if (!appearance::LayoutSize(layoutId, width, height)) return 0;
+        if (outWidth) *outWidth = width;
+        if (outHeight) *outHeight = height;
+        return 1;
+    }
+
+    uint32_t __cdecl AppearanceSectionCount(uint32_t layoutId)
+    {
+        return appearance::SectionCount(layoutId);
+    }
+
+    int __cdecl AppearanceSectionAt(uint32_t layoutId, uint32_t index, WXL_TextureSection* out)
+    {
+        return out && appearance::SectionAt(layoutId, index, *out) ? 1 : 0;
+    }
+
+    const WXL_AppearanceApi g_appearanceApi = {
+        sizeof(WXL_AppearanceApi),
+        WXL_APPEARANCE_API_VERSION,
+        &AppearanceForCharacter,
+        &AppearanceForCreature,
+        &AppearanceChrModelForRace,
+        &AppearanceOptionCount,
+        &AppearanceOptionAt,
+        &AppearanceChoiceCount,
+        &AppearanceChoiceAt,
+        &AppearanceLayoutForModel,
+        &AppearanceLayoutSize,
+        &AppearanceSectionCount,
+        &AppearanceSectionAt,
     };
 
     // --- vtable glue: the retail lighting tables (LightState is POD, copied by value across the
@@ -302,7 +445,13 @@ int __cdecl WXL_Load(const WXL_Api* api)
     api->PublishInterface("wxl.db2", WXL_DB2_API_VERSION, const_cast<WXL_Db2Api*>(&g_db2Api));
     api->PublishInterface("wxl.fdid", WXL_FDID_API_VERSION, const_cast<WXL_FdidApi*>(&g_fdidApi));
     api->PublishInterface("wxl.light", WXL_LIGHT_API_VERSION, const_cast<WXL_LightApi*>(&g_lightApi));
+    api->PublishInterface("wxl.modeldata", WXL_MODEL_DATA_API_VERSION,
+                          const_cast<WXL_ModelDataApi*>(&g_modelDataApi));
+    api->PublishInterface("wxl.appearance", WXL_APPEARANCE_API_VERSION,
+                          const_cast<WXL_AppearanceApi*>(&g_appearanceApi));
     wxl_db2::InstallLightStore();
-    api->Log(WXL_LOG_INFO, "wxl-db2", "DB2 table service + FileDataID resolver + lighting tables published");
+    api->Log(WXL_LOG_INFO, "wxl-db2",
+             "DB2 table service + FileDataID resolver + lighting tables + ModelFileData"
+             " + appearance recipes published");
     return 1;
 }
