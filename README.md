@@ -33,7 +33,9 @@ WarcraftXL on a 3.3.5a client, build 12340.
 This extension builds against [wxl-core](https://github.com/WarcraftXL/wxl-core) (branch `v1.1`), which
 auto-discovers any folder dropped into its `extensions/` directory, so there's no project file of its own
 needed here. See `.github/workflows/release.yml` for the exact steps; every push to `main` builds
-`wxl-db2.dll` and publishes it as a release.
+the flat `wxl-db2.dll` + `wxl-db2.cfg` Hub package and publishes it as a release. The configuration
+file is intentionally present as the stable Hub asset contract; the module currently has no
+per-service runtime settings.
 
 ## Project layout
 

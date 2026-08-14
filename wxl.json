@@ -3,10 +3,10 @@
 
   "extension": {
     "id": "wxl-db2",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "abi": "1.1",
     "entry": "wxl-db2.dll",
-    "assets": [],
+    "assets": ["wxl-db2.cfg"],
     "requires": {},
     "conflicts": [],
 
@@ -15,7 +15,7 @@
 
   "deploy": {
     "mode": "release",
-    "match": "*.dll"
+    "match": "wxl-db2-v*.zip"
   },
 
   "listing": {
