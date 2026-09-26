@@ -27,10 +27,12 @@
 
 #include "wxl/AppearanceApi.h"
 #include "wxl/Db2Api.h"
+#include "wxl/Db2StringApi.h"
 #include "wxl/FdidApi.h"
 #include "wxl/LightApi.h"
 #include "wxl/ModelDataApi.h"
 #include "wxl/PluginApi.h"
+#include "wxl/RetailSpellDb2Api.h"
 
 #include <cstring>
 #include <vector>
@@ -52,7 +54,13 @@ namespace
 
         std::vector<db2::Field> fields(definition->fieldCount);
         for (uint32_t i = 0; i < definition->fieldCount; ++i)
-            fields[i] = db2::Field{definition->fields[i].name, definition->fields[i].elements};
+        {
+            const char* name = definition->fields[i].name ? definition->fields[i].name : "";
+            const std::string_view fieldName(name);
+            fields[i] = db2::Field{
+                fieldName, definition->fields[i].elements, 1, fieldName.ends_with("_lang")
+            };
+        }
 
         std::vector<db2::Relation> relations(definition->relationCount);
         for (uint32_t i = 0; i < definition->relationCount; ++i)
@@ -174,6 +182,21 @@ namespace
         &Db2TableHash,
     };
 
+    const char* __cdecl Db2String(void* table, const void* row,
+                                  const char* field, uint32_t element)
+    {
+        if (!table || !row || !field) return "";
+        const std::string_view value = static_cast<db2::Table*>(table)->String(
+            *static_cast<const db2::wdc5::Row*>(row), field, element);
+        return value.data() ? value.data() : "";
+    }
+
+    const WXL_Db2StringApi g_db2StringApi = {
+        sizeof(WXL_Db2StringApi),
+        WXL_DB2_STRING_API_VERSION,
+        &Db2String,
+    };
+
     // --- vtable glue: the FDID resolver (TextureFilePath/ModelFilePath, see FdidResolver.cpp) ------
 
     const WXL_FdidApi g_fdidApi = {
@@ -286,6 +309,26 @@ namespace
         return out && appearance::ChoiceAt(optionId, index, *out) ? 1 : 0;
     }
 
+    const char* __cdecl AppearanceOptionName(uint32_t optionId)
+    {
+        return appearance::OptionName(optionId);
+    }
+
+    const char* __cdecl AppearanceChoiceName(uint32_t choiceId)
+    {
+        return appearance::ChoiceName(choiceId);
+    }
+
+    uint32_t __cdecl AppearanceChoiceSwatchColor2(uint32_t choiceId)
+    {
+        return appearance::ChoiceSwatchColor2(choiceId);
+    }
+
+    uint32_t __cdecl AppearanceOptionSecondaryOrderIndex(uint32_t optionId)
+    {
+        return appearance::OptionSecondaryOrderIndex(optionId);
+    }
+
     uint32_t __cdecl AppearanceLayoutForModel(uint32_t chrModelId)
     {
         return appearance::LayoutForModel(chrModelId);
@@ -324,6 +367,10 @@ namespace
         &AppearanceLayoutSize,
         &AppearanceSectionCount,
         &AppearanceSectionAt,
+        &AppearanceOptionName,
+        &AppearanceChoiceName,
+        &AppearanceChoiceSwatchColor2,
+        &AppearanceOptionSecondaryOrderIndex,
     };
 
     // --- vtable glue: the retail lighting tables (LightState is POD, copied by value across the
@@ -447,15 +494,45 @@ int __cdecl WXL_Load(const WXL_Api* api)
     wxl_db2::g_api = api;
 
     api->PublishInterface("wxl.db2", WXL_DB2_API_VERSION, const_cast<WXL_Db2Api*>(&g_db2Api));
-    api->PublishInterface("wxl.fdid", WXL_FDID_API_VERSION, const_cast<WXL_FdidApi*>(&g_fdidApi));
-    api->PublishInterface("wxl.light", WXL_LIGHT_API_VERSION, const_cast<WXL_LightApi*>(&g_lightApi));
+    api->PublishInterface("wxl.db2.strings", WXL_DB2_STRING_API_VERSION,
+                          const_cast<WXL_Db2StringApi*>(&g_db2StringApi));
+    api->PublishInterface("wxl.db2.filtered", WXL_DB2_FILTER_API_VERSION,
+                          const_cast<WXL_Db2FilterApi*>(wxl_db2::FilterApi()));
+
+    if (wxl_db2::ConfigBool("WXL_DB2_FDID", true))
+        api->PublishInterface("wxl.fdid", WXL_FDID_API_VERSION,
+                              const_cast<WXL_FdidApi*>(&g_fdidApi));
+    else
+        api->Log(WXL_LOG_INFO, "wxl-db2", "FileDataID resolver disabled by configuration");
+
     api->PublishInterface("wxl.modeldata", WXL_MODEL_DATA_API_VERSION,
                           const_cast<WXL_ModelDataApi*>(&g_modelDataApi));
     api->PublishInterface("wxl.appearance", WXL_APPEARANCE_API_VERSION,
                           const_cast<WXL_AppearanceApi*>(&g_appearanceApi));
-    wxl_db2::InstallLightStore();
+
+    if (wxl_db2::ConfigBool("WXL_DB2_LIGHTS", true))
+    {
+        api->PublishInterface("wxl.light", WXL_LIGHT_API_VERSION,
+                              const_cast<WXL_LightApi*>(&g_lightApi));
+        wxl_db2::InstallLightStore();
+    }
+    else
+        api->Log(WXL_LOG_INFO, "wxl-db2", "retail lighting tables disabled by configuration");
+
+    api->PublishInterface("wxl.retail-db2", WXL_RETAIL_DB2_API_VERSION,
+                          const_cast<WXL_RetailDb2Api*>(wxl_db2::RetailApi()));
+    if (wxl_db2::ConfigBool("WXL_DB2_RETAIL_ITEMS", true))
+        wxl_db2::InstallRetailItemIndex();
+    else
+        api->Log(WXL_LOG_INFO, "wxl-db2", "retail item/collection graph disabled by configuration");
+
+    api->PublishInterface("wxl.retail-spell-db2", WXL_RETAIL_SPELL_DB2_API_VERSION,
+                          const_cast<WXL_RetailSpellDb2Api*>(wxl_db2::RetailSpellApi()));
+    if (!wxl_db2::ConfigBool("WXL_DB2_RETAIL_SPELLS", true))
+        api->Log(WXL_LOG_INFO, "wxl-db2", "retail spell-visual graph disabled by configuration");
+
     api->Log(WXL_LOG_INFO, "wxl-db2",
-             "DB2 table service + FileDataID resolver + lighting tables + ModelFileData"
-             " + appearance recipes published");
+             "DB2 v1 + filtered DB2 + ModelFileData + appearance recipes"
+             " + optional retail data services published");
     return 1;
 }

@@ -106,6 +106,14 @@ namespace wxl::runtime::db2::appearance
     uint32_t ChoiceCount(uint32_t chrCustomizationOptionId);
     bool     ChoiceAt(uint32_t chrCustomizationOptionId, uint32_t index, WXL_ChrChoice& out);
 
+    /// Stable UTF-8 labels owned by the decoded DB2 string pools. Null when the row or label is
+    /// absent. Their lifetime is the process lifetime because the appearance tables load once and
+    /// never move afterwards.
+    const char* OptionName(uint32_t chrCustomizationOptionId);
+    const char* ChoiceName(uint32_t chrCustomizationChoiceId);
+    uint32_t    ChoiceSwatchColor2(uint32_t chrCustomizationChoiceId);
+    uint32_t    OptionSecondaryOrderIndex(uint32_t chrCustomizationOptionId);
+
     /// The layout a ChrModel's textures are addressed in, 0 when it names none. Separate from the
     /// recipe because the sheet has to be sized before a single choice is known.
     uint32_t LayoutForModel(uint32_t chrModelId);

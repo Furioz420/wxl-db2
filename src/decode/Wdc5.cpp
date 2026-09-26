@@ -1,4 +1,5 @@
 // Minimal WDC5 reader used by the retail DB2 compatibility layer.
+// Format notes: https://wowdev.wiki/DB2 (WDC5), mirrored locally by the project owner.
 // Copyright (C) 2026 WarcraftXL. GPLv3.
 
 #include "Wdc5.hpp"
@@ -176,6 +177,19 @@ namespace wxl::runtime::db2::wdc5
                 return true;
             }
 
+            bool ReadCString(std::string& out)
+            {
+                if ((bit_ & 7u) != 0 || bit_ > bits_) return false;
+                const size_t begin = bit_ >> 3;
+                const size_t end = bits_ >> 3;
+                size_t terminator = begin;
+                while (terminator < end && data_[terminator] != 0) ++terminator;
+                if (terminator == end) return false;
+                out.assign(reinterpret_cast<const char*>(data_ + begin), terminator - begin);
+                bit_ = (terminator + 1) * 8;
+                return true;
+            }
+
         private:
             const uint8_t* data_ = nullptr;
             size_t bits_ = 0;
@@ -192,7 +206,7 @@ namespace wxl::runtime::db2::wdc5
 
         bool DecodeScalar(BitReader& bits, uint32_t rowId, const FieldMeta& field,
                           const ColumnMeta& column, const std::vector<uint32_t>& pallet,
-                          const CommonMap& common, uint32_t& out)
+                          const CommonMap& common, uint64_t& out)
         {
             uint64_t value = 0;
             const auto compression = static_cast<Compression>(column.compression);
@@ -202,21 +216,21 @@ namespace wxl::runtime::db2::wdc5
                 {
                     int width = 32 - field.bits;
                     if (width <= 0) width = static_cast<int>(column.value2);
-                    if (width <= 0 || width > 32 || !bits.Read(static_cast<uint32_t>(width), value)) return false;
-                    out = static_cast<uint32_t>(value);
+                    if (width <= 0 || width > 64 || !bits.Read(static_cast<uint32_t>(width), value)) return false;
+                    out = value;
                     return true;
                 }
                 case Compression::Immediate:
-                    if (column.value2 > 32 || !bits.Read(column.value2, value)) return false;
-                    out = static_cast<uint32_t>(value);
+                    if (column.value2 > 64 || !bits.Read(column.value2, value)) return false;
+                    out = value;
                     return true;
                 case Compression::SignedImmediate:
                 {
                     const uint32_t width = column.value2;
-                    if (width == 0 || width > 32 || !bits.Read(width, value)) return false;
-                    if (width < 32 && (value & (uint64_t{1} << (width - 1))))
+                    if (width == 0 || width > 64 || !bits.Read(width, value)) return false;
+                    if (width < 64 && (value & (uint64_t{1} << (width - 1))))
                         value |= ~((uint64_t{1} << width) - 1);
-                    out = static_cast<uint32_t>(value);
+                    out = value;
                     return true;
                 }
                 case Compression::Common:
@@ -241,6 +255,10 @@ namespace wxl::runtime::db2::wdc5
         rows_.clear();
         byId_.clear();
         fieldOffsets_.clear();
+        fieldElements_.clear();
+        fieldWords_.clear();
+        fieldStrings_.clear();
+        strings_.clear();
         layoutHash_ = 0;
         tableHash_ = 0;
         schema_.clear();
@@ -256,12 +274,21 @@ namespace wxl::runtime::db2::wdc5
             return Fail(error, "WDC5: physical field count does not match the compiled schema");
         if (header.sectionCount == 0 && header.recordCount != 0)
             return Fail(error, "WDC5: records exist but the section table is empty");
-        if ((header.flags & kFlagSparse) != 0)
-            return Fail(error, "WDC5: sparse tables are not supported by this compatibility layer");
+        const bool sparse = (header.flags & kFlagSparse) != 0;
 
         fieldOffsets_.resize(header.fieldCount + 1);
+        fieldElements_.resize(header.fieldCount);
+        fieldWords_.resize(header.fieldCount);
+        fieldStrings_.resize(header.fieldCount);
         for (size_t i = 0; i < header.fieldCount; ++i)
-            fieldOffsets_[i + 1] = fieldOffsets_[i] + std::max<uint16_t>(1, shapes[i].elements);
+        {
+            const uint16_t elements = std::max<uint16_t>(1, shapes[i].elements);
+            const uint8_t words = std::clamp<uint8_t>(shapes[i].words, 1, 2);
+            fieldElements_[i] = elements;
+            fieldWords_[i] = words;
+            fieldStrings_[i] = shapes[i].string ? 1u : 0u;
+            fieldOffsets_[i + 1] = fieldOffsets_[i] + static_cast<size_t>(elements) * words;
+        }
 
         layoutHash_ = header.layoutHash;
         tableHash_ = header.tableHash;
@@ -312,19 +339,39 @@ namespace wxl::runtime::db2::wdc5
         }
 
         rows_.reserve(header.recordCount);
+        strings_.emplace_back();
+        std::unordered_map<std::string, uint32_t> stringIds;
+        stringIds.emplace(std::string{}, 0u);
         std::unordered_map<uint32_t, uint32_t> copies;
         uint32_t globalRecordIndex = 0;
+        size_t globalStringOffset = 0;
         for (const SectionHeader& section : sections)
         {
             if (!cursor.Seek(section.fileOffset)) return Fail(error, "WDC5: section offset is outside the file");
-            const size_t recordBytes = static_cast<size_t>(section.recordCount) * header.recordSize;
-            if (header.recordSize && recordBytes / header.recordSize != section.recordCount)
-                return Fail(error, "WDC5: record byte count overflow");
-            if (cursor.Position() > size || recordBytes > size - cursor.Position())
-                return Fail(error, "WDC5: truncated record block");
             const uint8_t* recordData = cursor.Data() + cursor.Position();
-            if (!cursor.Skip(recordBytes) || !cursor.Skip(section.stringTableSize))
-                return Fail(error, "WDC5: truncated record/string block");
+            const uint8_t* stringData = nullptr;
+            size_t recordBytes = 0;
+            if (sparse)
+            {
+                if (section.offsetRecordsEnd < section.fileOffset)
+                    return Fail(error, "WDC5: sparse record range is inverted");
+                recordBytes = static_cast<size_t>(section.offsetRecordsEnd - section.fileOffset);
+                if (recordBytes > size - cursor.Position() || !cursor.Skip(recordBytes))
+                    return Fail(error, "WDC5: truncated sparse record block");
+            }
+            else
+            {
+                recordBytes = static_cast<size_t>(section.recordCount) * header.recordSize;
+                if (header.recordSize && recordBytes / header.recordSize != section.recordCount)
+                    return Fail(error, "WDC5: record byte count overflow");
+                if (recordBytes > size - cursor.Position() || !cursor.Skip(recordBytes))
+                    return Fail(error, "WDC5: truncated record block");
+                stringData = cursor.Data() + cursor.Position();
+                if (!cursor.Skip(section.stringTableSize))
+                    return Fail(error, "WDC5: truncated record/string block");
+            }
+            const bool encryptedRecordsZero = section.tactKeyLookup != 0 &&
+                std::all_of(recordData, recordData + recordBytes, [](uint8_t value) { return value == 0; });
 
             std::vector<uint32_t> ids;
             if ((section.idListSize & 3u) != 0 || !cursor.ReadArray(ids, section.idListSize / 4u))
@@ -332,16 +379,36 @@ namespace wxl::runtime::db2::wdc5
             if (!ids.empty() && ids.size() != section.recordCount)
                 return Fail(error, "WDC5: id-list length does not match section records");
 
+            bool sectionCopyHasIdentity = false;
             for (uint32_t i = 0; i < section.copyTableCount; ++i)
             {
                 uint32_t destination = 0, source = 0;
                 if (!cursor.Read(destination) || !cursor.Read(source))
                     return Fail(error, "WDC5: truncated copy table");
+                sectionCopyHasIdentity = sectionCopyHasIdentity || destination != 0 || source != 0;
                 if (destination != source) copies[destination] = source;
             }
 
+            std::vector<SparseEntry> sparseEntries;
             if (section.offsetMapIdCount != 0)
-                return Fail(error, "WDC5: unexpected offset map in a non-sparse retail table");
+            {
+                if (!sparse)
+                    return Fail(error, "WDC5: unexpected offset map in a non-sparse retail table");
+                if (!cursor.ReadArray(sparseEntries, section.offsetMapIdCount))
+                    return Fail(error, "WDC5: truncated sparse offset map");
+                if (sparseEntries.size() != section.recordCount)
+                    return Fail(error, "WDC5: sparse offset-map length does not match section records");
+            }
+            else if (sparse && section.recordCount != 0)
+            {
+                return Fail(error, "WDC5: sparse section has no offset map");
+            }
+
+            if (sparse && section.offsetMapIdCount != 0 && (header.flags & kFlagSecondaryKey) != 0)
+            {
+                if (!cursor.ReadArray(ids, section.offsetMapIdCount))
+                    return Fail(error, "WDC5: truncated secondary sparse id list");
+            }
 
             std::unordered_map<uint32_t, uint32_t> parentByIndex;
             if (section.relationshipDataSize)
@@ -364,11 +431,50 @@ namespace wxl::runtime::db2::wdc5
                     return Fail(error, "WDC5: malformed relationship-data size");
             }
 
+            if (sparse && section.offsetMapIdCount != 0 && (header.flags & kFlagSecondaryKey) == 0)
+            {
+                if (!cursor.ReadArray(ids, section.offsetMapIdCount))
+                    return Fail(error, "WDC5: truncated sparse id list");
+            }
+            if (!ids.empty() && ids.size() != section.recordCount)
+                return Fail(error, "WDC5: final id-list length does not match section records");
+
+            if (encryptedRecordsZero)
+            {
+                const bool identitiesZero = !sectionCopyHasIdentity &&
+                    std::all_of(ids.begin(), ids.end(), [](uint32_t id) { return id == 0; });
+                const bool offsetsZero = !sparse || std::all_of(
+                    sparseEntries.begin(), sparseEntries.end(),
+                    [](const SparseEntry& entry) { return entry.offset == 0 && entry.size == 0; });
+                if (identitiesZero && offsetsZero)
+                {
+                    globalRecordIndex += section.recordCount;
+                    globalStringOffset += section.stringTableSize;
+                    continue;
+                }
+            }
+
             for (uint32_t i = 0; i < section.recordCount; ++i, ++globalRecordIndex)
             {
                 Row row;
                 row.values.resize(fieldOffsets_.back());
-                BitReader bits(recordData + static_cast<size_t>(i) * header.recordSize, header.recordSize);
+                const uint8_t* rowData = nullptr;
+                size_t rowBytes = 0;
+                if (sparse)
+                {
+                    const SparseEntry& entry = sparseEntries[i];
+                    if (entry.offset < section.fileOffset || entry.offset > section.offsetRecordsEnd ||
+                        entry.size > section.offsetRecordsEnd - entry.offset)
+                        return Fail(error, "WDC5: sparse row is outside its section record block");
+                    rowData = cursor.Data() + entry.offset;
+                    rowBytes = entry.size;
+                }
+                else
+                {
+                    rowData = recordData + static_cast<size_t>(i) * header.recordSize;
+                    rowBytes = header.recordSize;
+                }
+                BitReader bits(rowData, rowBytes);
 
                 if ((header.flags & kFlagNonInlineId) != 0)
                 {
@@ -380,16 +486,35 @@ namespace wxl::runtime::db2::wdc5
                 {
                     const ColumnMeta& column = columnMeta[fieldIndex];
                     const auto compression = static_cast<Compression>(column.compression);
-                    uint16_t elements = std::max<uint16_t>(1, shapes[fieldIndex].elements);
+                    uint16_t elements = fieldElements_[fieldIndex];
+                    const uint8_t words = fieldWords_[fieldIndex];
                     if (compression == Compression::PalletArray)
                         elements = static_cast<uint16_t>(column.value3);
 
                     // The compiled shape and WDC5 pallet cardinality should describe the same logical array.
-                    if (fieldOffsets_[fieldIndex + 1] - fieldOffsets_[fieldIndex] != elements)
+                    if (fieldOffsets_[fieldIndex + 1] - fieldOffsets_[fieldIndex] !=
+                        static_cast<size_t>(elements) * words)
                         return Fail(error, "WDC5: pallet cardinality does not match the compiled schema");
                     uint32_t* values = row.values.data() + fieldOffsets_[fieldIndex];
-                    if (compression == Compression::PalletArray)
+                    if (sparse && fieldStrings_[fieldIndex])
                     {
+                        if (words != 1)
+                            return Fail(error, "WDC5: unsupported 64-bit sparse string field");
+                        for (uint16_t element = 0; element < elements; ++element)
+                        {
+                            std::string value;
+                            if (!bits.ReadCString(value))
+                                return Fail(error, "WDC5: unterminated sparse inline string");
+                            const auto [it, inserted] = stringIds.try_emplace(
+                                value, static_cast<uint32_t>(strings_.size()));
+                            if (inserted) strings_.push_back(std::move(value));
+                            values[element] = it->second;
+                        }
+                    }
+                    else if (compression == Compression::PalletArray)
+                    {
+                        if (words != 1 || fieldStrings_[fieldIndex])
+                            return Fail(error, "WDC5: unsupported pallet-array field shape");
                         uint64_t palletIndex = 0;
                         if (column.value2 > 32 || !bits.Read(column.value2, palletIndex))
                             return Fail(error, "WDC5: invalid pallet-array index");
@@ -402,9 +527,51 @@ namespace wxl::runtime::db2::wdc5
                     {
                         for (uint16_t element = 0; element < elements; ++element)
                         {
+                            const size_t fieldBytePosition = bits.Bit() >> 3;
+                            uint64_t decoded = 0;
                             if (!DecodeScalar(bits, row.id, fieldMeta[fieldIndex], column,
-                                              pallets[fieldIndex], commons[fieldIndex], values[element]))
+                                              pallets[fieldIndex], commons[fieldIndex], decoded))
                                 return Fail(error, "WDC5: failed to decode a field");
+                            uint32_t stored = static_cast<uint32_t>(decoded);
+                            if (fieldStrings_[fieldIndex])
+                            {
+                                // String offsets address the logical concatenation of every section's
+                                // records followed by every section's string table. Physical WDC5 files
+                                // interleave each section's records and strings, so translate the global
+                                // DBCD.IO offset back into this section's string block.
+                                const int64_t relative =
+                                    static_cast<int64_t>(globalRecordIndex) * header.recordSize -
+                                    static_cast<int64_t>(header.recordCount) * header.recordSize +
+                                    static_cast<int64_t>(fieldBytePosition) +
+                                    static_cast<int32_t>(stored);
+                                if (relative < 0)
+                                {
+                                    stored = 0;
+                                }
+                                else
+                                {
+                                    const size_t absoluteOffset = static_cast<size_t>(relative);
+                                    if (absoluteOffset < globalStringOffset ||
+                                        absoluteOffset - globalStringOffset >= section.stringTableSize)
+                                        return Fail(error, "WDC5: string offset is outside its section");
+                                    const size_t offset = absoluteOffset - globalStringOffset;
+                                    const uint8_t* begin = stringData + offset;
+                                    const uint8_t* end = stringData + section.stringTableSize;
+                                    const uint8_t* terminator = std::find(begin, end, uint8_t{0});
+                                    if (terminator == end)
+                                        return Fail(error, "WDC5: unterminated section string");
+                                    std::string value(reinterpret_cast<const char*>(begin),
+                                                      reinterpret_cast<const char*>(terminator));
+                                    const auto [it, inserted] = stringIds.try_emplace(
+                                        value, static_cast<uint32_t>(strings_.size()));
+                                    if (inserted) strings_.push_back(std::move(value));
+                                    stored = it->second;
+                                }
+                            }
+                            values[static_cast<size_t>(element) * words] = stored;
+                            if (words > 1)
+                                values[static_cast<size_t>(element) * words + 1] =
+                                    static_cast<uint32_t>(decoded >> 32);
                         }
                     }
 
@@ -417,15 +584,23 @@ namespace wxl::runtime::db2::wdc5
                 if (parent != parentByIndex.end()) row.parentId = parent->second;
                 rows_.push_back(std::move(row));
             }
+            globalStringOffset += section.stringTableSize;
         }
 
+        // Copy rows refer to an existing row id. Keep an incremental id index so expansion is O(rows +
+        // copies), rather than linearly scanning the growing row vector once for every copy entry.
+        std::unordered_map<uint32_t, size_t> copySources;
+        copySources.reserve(rows_.size() + copies.size());
+        for (size_t i = 0; i < rows_.size(); ++i)
+            copySources[rows_[i].id] = i;
         for (const auto& [destination, source] : copies)
         {
-            const auto it = std::find_if(rows_.begin(), rows_.end(), [source](const Row& row) { return row.id == source; });
-            if (it == rows_.end()) continue;
-            Row copy = *it;
+            const auto it = copySources.find(source);
+            if (it == copySources.end()) continue;
+            Row copy = rows_[it->second];
             copy.id = destination;
             rows_.push_back(std::move(copy));
+            copySources[destination] = rows_.size() - 1;
         }
 
         byId_.reserve(rows_.size());
@@ -433,22 +608,4 @@ namespace wxl::runtime::db2::wdc5
         return true;
     }
 
-    const Row* Table::Find(uint32_t id) const noexcept
-    {
-        const auto it = byId_.find(id);
-        return it == byId_.end() ? nullptr : &rows_[it->second];
-    }
-
-    uint32_t Table::Value(const Row& row, size_t field, size_t element) const noexcept
-    {
-        if (field + 1 >= fieldOffsets_.size()) return 0;
-        const size_t begin = fieldOffsets_[field];
-        const size_t end = fieldOffsets_[field + 1];
-        return element < end - begin && begin + element < row.values.size() ? row.values[begin + element] : 0;
-    }
-
-    size_t Table::ElementCount(size_t field) const noexcept
-    {
-        return field + 1 < fieldOffsets_.size() ? fieldOffsets_[field + 1] - fieldOffsets_[field] : 0;
-    }
 }

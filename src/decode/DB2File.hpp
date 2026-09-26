@@ -16,7 +16,7 @@
 
 #include <cstdint>
 #include <vector>
-#include <unordered_map>
+#include "CompactLookup.hpp"
 
 // DB2File: one .db2 table loaded from the client's own archive set and decoded into a flat array of
 // fixed-size records, indexed by id. The on-disk record (which may be bitpacked, palletised, common-data
@@ -75,7 +75,7 @@ namespace wxl::features::db2
         std::vector<char>    m_records; // m_numRows * m_rowSize decoded bytes
         std::vector<int32_t> m_ids;     // per-row id, parallel to m_records
         std::vector<char>    m_strings; // reconstructed string table
-        std::unordered_map<int32_t, uint32_t> m_idIndex; // id -> row index
+        wxl::db2::compact::IdIndex m_idIndex; // sorted id -> row index
 
     private:
         void BuildIndex();              // fill m_idIndex + min/max from m_ids
