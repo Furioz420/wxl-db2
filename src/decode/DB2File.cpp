@@ -114,14 +114,12 @@ namespace wxl::features::db2
 
     void DB2File::BuildIndex()
     {
-        m_idIndex.clear();
-        m_idIndex.reserve(m_ids.size());
+        m_idIndex.Build(m_ids);
         m_minId = 0x7FFFFFFF;
         m_maxId = -1;
         for (uint32_t i = 0; i < m_ids.size(); ++i)
         {
             int32_t id = m_ids[i];
-            m_idIndex[id] = i;
             if (id < m_minId) m_minId = id;
             if (id > m_maxId) m_maxId = id;
         }
@@ -137,14 +135,14 @@ namespace wxl::features::db2
         m_records.clear();
         m_ids.clear();
         m_strings.clear();
-        m_idIndex.clear();
+        m_idIndex.Clear();
     }
 
     const void* DB2File::RowById(int32_t id) const
     {
-        auto it = m_idIndex.find(id);
-        if (it == m_idIndex.end()) return nullptr;
-        return m_records.data() + static_cast<size_t>(it->second) * m_rowSize;
+        uint32_t row = 0;
+        if (!m_idIndex.Find(id, row)) return nullptr;
+        return m_records.data() + static_cast<size_t>(row) * m_rowSize;
     }
 
     const void* DB2File::RowByIndex(uint32_t index) const

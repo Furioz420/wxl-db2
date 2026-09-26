@@ -16,7 +16,15 @@
 
 #pragma once
 
+#include "common/ExtensionConfig.hpp"
+#include "wxl/Db2FilterApi.h"
 #include "wxl/PluginApi.h"
+#include "wxl/RetailDb2Api.h"
+#include "wxl/RetailSpellDb2Api.h"
+
+#include <windows.h>
+
+#include <cstddef>
 
 /// The core hands this pointer to WXL_Load once and it lives for the process lifetime, so every call
 /// site reaches it through here instead of threading an `api` parameter through the call chain.
@@ -25,6 +33,23 @@ namespace wxl_db2
     extern const WXL_Api* g_api;
 
     bool InstallLightStore(); // schemas/LightStore.cpp
+    bool InstallRetailItemIndex(); // api/RetailItemIndex.cpp
+    const ::WXL_Db2FilterApi* FilterApi();
+    const ::WXL_RetailDb2Api* RetailApi();
+    const ::WXL_RetailSpellDb2Api* RetailSpellApi();
+
+    inline bool ConfigRaw(const char* name, char* buf, size_t cap)
+    {
+        return wxl::ext::config::Raw(name, buf, cap, "Extensions\\wxl-db2\\wxl-db2.cfg");
+    }
+
+    inline bool ConfigBool(const char* name, bool fallback)
+    {
+        char value[16] = {};
+        return ConfigRaw(name, value, sizeof value)
+            ? wxl::ext::config::Truthy(value, fallback)
+            : fallback;
+    }
 }
 
 // common/Log.hpp's WLOG_* macros need common/Log.cpp linked in, which is core/host/patcher-only; an

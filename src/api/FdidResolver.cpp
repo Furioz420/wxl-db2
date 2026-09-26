@@ -36,35 +36,19 @@ namespace wxl::db2::fdid
 
         wxl::features::db2::DB2Table<PathRow> g_tex;
         wxl::features::db2::DB2Table<PathRow> g_model;
-        decl::Table                          g_texData;
-        std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, uint32_t>>> g_mridIndex;
-        std::unordered_map<std::string, uint32_t> g_modelIdByStem;
+        compact::MaterialIndex g_mridIndex;
+        compact::StemIndex g_modelIdByStem;
 
         std::once_flag g_once;
         bool           g_ready = false;
-
-        /// Lowercases, folds forward slashes to backslashes and drops any extension, so the one
-        /// spelling the path table stores and the many a caller can hold collapse to the same key.
-        std::string NormalizeStem(const char* path)
-        {
-            std::string s;
-            for (const char* p = path; *p; ++p)
-            {
-                const char c = *p;
-                s.push_back(c == '/' ? '\\'
-                                     : static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-            }
-            const size_t dot = s.find_last_of('.');
-            const size_t sep = s.find_last_of('\\');
-            if (dot != std::string::npos && (sep == std::string::npos || dot > sep)) s.resize(dot);
-            return s;
-        }
 
         void LoadTables()
         {
             g_tex.Load("TextureFilePath.db2");
             g_model.Load("ModelFilePath.db2");
 
+            // Only the compact material triples survive initialization.
+            decl::Table g_texData;
             std::string texDataError;
             if (!g_texData.Load(kTextureFileData, &texDataError))
                 WLOG_WARN("db2-fdid: TextureFileData did not decode (%s); every lookup keyed on a"
@@ -73,11 +57,12 @@ namespace wxl::db2::fdid
 
             const size_t usage = g_texData.FieldIndex("UsageType");
             const size_t mrid  = g_texData.FieldIndex("MaterialResourcesID");
+            g_mridIndex.Reserve(g_texData.Rows().size());
             for (const decl::wdc5::Row& row : g_texData.Rows())
-                g_mridIndex[g_texData.Value(row, mrid)].push_back(
-                    { g_texData.Value(row, usage), row.id });
+                g_mridIndex.Add(g_texData.Value(row, mrid), g_texData.Value(row, usage), row.id);
+            g_mridIndex.Finish();
 
-            g_modelIdByStem.reserve(g_model.RowCount());
+            g_modelIdByStem.Reserve(g_model.RowCount());
             for (uint32_t i = 0; i < g_model.RowCount(); ++i)
             {
                 const PathRow* r = g_model.At(i);
@@ -85,12 +70,16 @@ namespace wxl::db2::fdid
                 const char* path = g_model.Str(static_cast<uint32_t>(r->path));
                 // First spelling wins: two rows collapsing to one stem differ only by container
                 // extension, and either id resolves to the same asset for every consumer here.
-                if (path && *path) g_modelIdByStem.emplace(NormalizeStem(path), r->id);
+                if (path && *path) g_modelIdByStem.Add(path, r->id);
             }
 
-            WLOG_INFO("db2-fdid: loaded texpath=%u model=%u texdata=%zu (MRID index=%zu, model stems=%zu)",
-                g_tex.RowCount(), g_model.RowCount(), g_texData.Rows().size(), g_mridIndex.size(),
-                g_modelIdByStem.size());
+            g_modelIdByStem.Finish();
+            WLOG_INFO("db2-fdid-compact-v1: stem_bytes=%zu material_bytes=%zu",
+                g_modelIdByStem.Bytes(), g_mridIndex.Bytes());
+
+            WLOG_INFO("db2-fdid: loaded texpath=%u model=%u texdata=%zu (MRID rows=%zu, model stems=%zu)",
+                g_tex.RowCount(), g_model.RowCount(), g_texData.Rows().size(), g_mridIndex.Size(),
+                g_modelIdByStem.Size());
 
             g_ready = g_tex.RowCount() != 0 || g_model.RowCount() != 0;
             if (!g_ready)
@@ -99,12 +88,7 @@ namespace wxl::db2::fdid
 
         uint32_t MridToFdid(uint32_t mrid, uint32_t want)
         {
-            auto it = g_mridIndex.find(mrid);
-            if (it == g_mridIndex.end()) return 0;
-            for (uint32_t target : { want, 2u })
-                for (const auto& c : it->second)
-                    if (c.first == target) return c.second;
-            return it->second[0].second;
+            return g_mridIndex.Find(mrid, want);
         }
 
         // fdid -> resolved path; an empty string is a confirmed miss (cached too, so a texture shared
@@ -143,8 +127,7 @@ namespace wxl::db2::fdid
         EnsureLoaded();
         if (!g_ready) return 0;
 
-        const auto it = g_modelIdByStem.find(NormalizeStem(modelPath));
-        return it == g_modelIdByStem.end() ? 0 : it->second;
+        return g_modelIdByStem.Find(modelPath);
     }
 
     bool ResolveFile(uint32_t fileDataId, std::string& outPath)

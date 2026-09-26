@@ -68,7 +68,7 @@ namespace wxl::runtime::db2::appearance
         };
 
         constexpr Field kChrCustomizationOptionFields[] = {
-            { "Name_lang" }, { "ID" }, { "SecondaryID" }, { "Flags" }, { "ChrModelID" },
+            { "Name_lang", 1, 1, true }, { "ID" }, { "SecondaryID" }, { "Flags" }, { "ChrModelID" },
             { "OrderIndex" }, { "ChrCustomizationCategoryID" }, { "OptionType" },
             { "BarberShopCostModifier" }, { "ChrCustomizationID" }, { "Requirement" },
             { "SecondaryOrderIndex" }, { "AddedInPatch" },
@@ -79,7 +79,7 @@ namespace wxl::runtime::db2::appearance
         };
 
         constexpr Field kChrCustomizationChoiceFields[] = {
-            { "Name_lang" }, { "ID" }, { "ChrCustomizationOptionID" }, { "ChrCustomizationReqID" },
+            { "Name_lang", 1, 1, true }, { "ID" }, { "ChrCustomizationOptionID" }, { "ChrCustomizationReqID" },
             { "ChrCustomizationVisReqID" }, { "OrderIndex" }, { "UiOrderIndex" }, { "Flags" },
             { "AddedInPatch" }, { "SoundKitID" }, { "SwatchColor", 2 },
         };
@@ -384,9 +384,11 @@ namespace wxl::runtime::db2::appearance
             const auto layers = g_layersByLayout.find(layoutId);
             if (layers == g_layersByLayout.end()) return;
 
+            bool matched = false;
             for (const wdc5::Row* layer : layers->second)
             {
                 if (g_textureLayer.Value(*layer, "ChrModelTextureTargetID") != target) continue;
+                matched = true;
                 out.layers.push_back({
                     g_textureLayer.Value(*layer, "TextureType"),
                     g_textureLayer.Value(*layer, "Layer"),
@@ -395,6 +397,14 @@ namespace wxl::runtime::db2::appearance
                     resource,
                 });
             }
+
+            // Pandaren male choices carry a target-14 naked-torso material, but PTR layout 129 has
+            // no ChrModelTextureLayer row consuming it. The otherwise-identical female layout 130
+            // maps target 14 to upper torso (section type 3), InferAlpha, at layer 4. Without that
+            // row the upper torso remains from the base atlas while the adjacent body regions use
+            // the selected skin materials, producing a perfectly straight chest/belly colour seam.
+            if (!matched && layoutId == 129 && target == 14)
+                out.layers.push_back({ 1, 4, 15, 1u << 3, resource });
         }
 
         /**
@@ -548,6 +558,42 @@ namespace wxl::runtime::db2::appearance
         out.flags        = g_choice.Value(row, "Flags");
         out.swatchColor  = g_choice.Value(row, "SwatchColor");
         return true;
+    }
+
+    const char* OptionName(uint32_t chrCustomizationOptionId)
+    {
+        EnsureLoaded();
+        if (!g_status.loaded) return nullptr;
+        const wdc5::Row* row = g_option.Find(chrCustomizationOptionId);
+        if (!row) return nullptr;
+        const std::string_view value = g_option.String(*row, "Name_lang");
+        return value.empty() ? nullptr : value.data();
+    }
+
+    const char* ChoiceName(uint32_t chrCustomizationChoiceId)
+    {
+        EnsureLoaded();
+        if (!g_status.loaded) return nullptr;
+        const wdc5::Row* row = g_choice.Find(chrCustomizationChoiceId);
+        if (!row) return nullptr;
+        const std::string_view value = g_choice.String(*row, "Name_lang");
+        return value.empty() ? nullptr : value.data();
+    }
+
+    uint32_t ChoiceSwatchColor2(uint32_t chrCustomizationChoiceId)
+    {
+        EnsureLoaded();
+        if (!g_status.loaded) return 0;
+        const wdc5::Row* row = g_choice.Find(chrCustomizationChoiceId);
+        return row ? g_choice.Value(*row, "SwatchColor", 1) : 0;
+    }
+
+    uint32_t OptionSecondaryOrderIndex(uint32_t chrCustomizationOptionId)
+    {
+        EnsureLoaded();
+        if (!g_status.loaded) return 0;
+        const wdc5::Row* row = g_option.Find(chrCustomizationOptionId);
+        return row ? g_option.Value(*row, "SecondaryOrderIndex") : 0;
     }
 
     uint32_t LayoutForModel(uint32_t chrModelId)

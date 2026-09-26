@@ -21,8 +21,7 @@ and what it publishes for other extensions to use).
   relations) and get typed rows back, without hand-rolling a decoder per table.
 - **Retail lighting tables**: `wxl.light`, a schema built on `wxl.db2` itself that answers "what's the
   light here, right now" for any map position and time of day, day-curve blending included.
-- **Crash-safe**: malformed or missing tables are a logged failure, never a crash; nothing downstream ever
-  sees a null it didn't ask for.
+- **Input validation**: malformed or missing tables are reported as load failures. Check startup logs and consumer behavior with the intended data set.
 
 ## Requirements
 
@@ -30,10 +29,7 @@ WarcraftXL on a 3.3.5a client, build 12340.
 
 ## Building
 
-This extension builds against [wxl-core](https://github.com/WarcraftXL/wxl-core) (branch `v1.1`), which
-auto-discovers any folder dropped into its `extensions/` directory, so there's no project file of its own
-needed here. See `.github/workflows/release.yml` for the exact steps; every push to `main` builds
-`wxl-db2.dll` and publishes it as a release.
+This source snapshot follows WXL integration commit `db5f1b5`. Build it with the matching core/API revision and the intended DB2 data; the moving upstream `v1.1` branch is not an exact compatibility pin. The imported `.github/workflows/release.yml` publishes from `main`, so keep this PR in draft until its core pin, Hub package contents, and runtime data are validated.
 
 ## Project layout
 

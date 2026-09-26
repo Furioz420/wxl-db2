@@ -1,7 +1,5 @@
-// FileDataID -> path resolution, backed by the client's own TextureFilePath/ModelFilePath/
-// TextureFileData DB2 tables (same WDC1/2/3 decode as DB2File.hpp/Db2Decode.hpp), read through the
-// client's own storage seam -- every table this needs is already in the client's own archive set
-// (see DB2File::Load).
+// FileDataID -> path resolution, backed by the client's TextureFilePath/ModelFilePath tables and
+// TextureFileData material graph, all read through the mounted archive set.
 // Copyright (C) 2026 WarcraftXL. GPLv3.
 
 #pragma once
