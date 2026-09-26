@@ -44,3 +44,13 @@ src/
 ## License
 
 GPL-3.0-or-later. See the license header in every source file.
+
+## Integration and release checks
+
+Build `wxl-db2` as a Win32 Release target against an exact compatible core/API commit. The current repository workflow stages a DLL only; `wxl-db2.cfg`, modern DB2 tables, FileDataID mappings, and localized CSV overlays are separate inputs and are not included in that workflow's DLL-only artifact. Match data schemas and layout hashes to the intended client build. Do not copy an entire retail database or overwrite the Wrath client data to satisfy a missing table.
+
+Verify startup logs, one WDC5/compact lookup, one FileDataID path, and the enabled retail item, model, spell, or lighting consumer that depends on the data. Compare a missing-table path as well as a populated path. The shared integration target compiles, but an isolated package build and client acceptance remain open. The `main` workflow publishes against moving upstream `v1.1`; pin the core and audit package contents before merging.
+
+## Credits
+
+The WXL core ABI and original module interfaces come from WarcraftXL contributors. The local v1.1 integration commits in this snapshot are attributed to Furioz in the integration history. Preserve source-file notices and the GPL-3.0-or-later `LICENSE` when redistributing source or binaries.
