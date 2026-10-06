@@ -1,5 +1,7 @@
 # wxl-db2
 
+[Build compatibility and release gate](BUILDING.md)
+
 **Reads modern client database tables, and resolves assets by FileDataID.**
 
 A [WarcraftXL](https://github.com/WarcraftXL/wxl-core) extension. Modern content stopped naming most
@@ -29,7 +31,7 @@ WarcraftXL on a 3.3.5a client, build 12340.
 
 ## Building
 
-This source snapshot follows WXL integration commit `db5f1b5`. Build it with the matching core/API revision and the intended DB2 data; the moving upstream `v1.1` branch is not an exact compatibility pin. The imported `.github/workflows/release.yml` publishes from `main`, so keep this PR in draft until its core pin, Hub package contents, and runtime data are validated.
+Build this source with the exact compatible core revision recorded in [BUILDING.md](BUILDING.md) and the intended DB2 data. Pull requests and `main` run a Win32 build; only an explicit version tag can publish a release. Runtime data and Hub package contents still need validation before tagging.
 
 ## Project layout
 
@@ -49,7 +51,7 @@ GPL-3.0-or-later. See the license header in every source file.
 
 Build `wxl-db2` as a Win32 Release target against an exact compatible core/API commit. The current repository workflow stages a DLL only; `wxl-db2.cfg`, modern DB2 tables, FileDataID mappings, and localized CSV overlays are separate inputs and are not included in that workflow's DLL-only artifact. Match data schemas and layout hashes to the intended client build. Do not copy an entire retail database or overwrite the Wrath client data to satisfy a missing table.
 
-Verify startup logs, one WDC5/compact lookup, one FileDataID path, and the enabled retail item, model, spell, or lighting consumer that depends on the data. Compare a missing-table path as well as a populated path. The shared integration target compiles, but an isolated package build and client acceptance remain open. The `main` workflow publishes against moving upstream `v1.1`; pin the core and audit package contents before merging.
+Verify startup logs, one WDC5/compact lookup, one FileDataID path, and the enabled retail item, model, spell, or lighting consumer that depends on the data. Compare a missing-table path as well as a populated path. The pinned clean-checkout target compiles; separately packaged DLL and client acceptance remain open.
 
 ## Credits
 
